@@ -1,0 +1,26 @@
+# Composer
+/vendor
+/composer.lock
+
+# Node
+/node_modules
+/package-lock.json
+
+# Build Artifacts (Keep standard files, ignore maps if desired, keeping for now)
+# /js
+# /css
+
+# Nextcloud
+/tests/integration/vendor
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+._*
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
