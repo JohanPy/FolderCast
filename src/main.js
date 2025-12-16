@@ -5,5 +5,14 @@ import App from './App.vue'
 
 Vue.mixin({ methods: { t, n } })
 
+console.log('FolderCast: main.js loaded');
 const View = Vue.extend(App)
-new View().$mount('#foldercast')
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('FolderCast: DOMContentLoaded');
+    if (document.getElementById('foldercast')) {
+        console.log('FolderCast: Mounting Vue...');
+        new View().$mount('#foldercast')
+    } else {
+        console.error('FolderCast: #foldercast element not found!');
+    }
+})

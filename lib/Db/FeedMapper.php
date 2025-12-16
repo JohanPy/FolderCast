@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace OCA\FolderCast\Db;
 
 use OCP\AppFramework\Db\QBMapper;
-use OCP\DB\IDBConnection;
+use OCP\IDBConnection;
 use OCP\AppFramework\Db\DoesNotExistException;
 
 /**
@@ -18,6 +18,17 @@ class FeedMapper extends QBMapper
         parent::__construct($db, 'foldercast_feeds', Feed::class);
     }
 
+    public function find(int $id): Feed
+    {
+        $qb = $this->db->getQueryBuilder();
+
+        $qb->select('*')
+            ->from('foldercast_feeds')
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($id)));
+
+        return $this->findEntity($qb);
+    }
+
     /**
      * @throws DoesNotExistException
      */
@@ -26,7 +37,7 @@ class FeedMapper extends QBMapper
         $qb = $this->db->getQueryBuilder();
 
         $qb->select('*')
-            ->from($this->appName)
+            ->from('foldercast_feeds')
             ->where($qb->expr()->eq('token', $qb->createNamedParameter($token)));
 
         return $this->findEntity($qb);
@@ -40,7 +51,7 @@ class FeedMapper extends QBMapper
         $qb = $this->db->getQueryBuilder();
 
         $qb->select('*')
-            ->from($this->appName)
+            ->from('foldercast_feeds')
             ->where($qb->expr()->eq('folder_id', $qb->createNamedParameter($folderId)));
 
         return $this->findEntity($qb);
@@ -51,8 +62,10 @@ class FeedMapper extends QBMapper
         $qb = $this->db->getQueryBuilder();
 
         $qb->select('*')
-            ->from($this->appName)
-            ->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
+            ->from('foldercast_feeds')
+            ->where(
+                $qb->expr()->eq('user_id', $qb->createNamedParameter($userId))
+            );
 
         return $this->findEntities($qb);
     }

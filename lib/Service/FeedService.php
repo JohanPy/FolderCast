@@ -104,12 +104,13 @@ class FeedService
         $config = json_decode($feed->getConfiguration() ?? '{}', true);
         $flatten = $config['flatten'] ?? true;
 
-        // Metadata Logic (Title, Description, Image)
+        // Default Metadata (Folder Name)
         $channelTitle = $folder->getName();
         $channelDesc = "Podcast from " . $folder->getName();
-        $channelImage = null; // URL to image
+        $channelAuthor = '';
+        $channelImage = null;
 
-        // Waterfall - Podcast.json
+        // Waterfall 1: podcast.json (File-based override)
         if ($folder->nodeExists('podcast.json')) {
             try {
                 $jsonFile = $folder->get('podcast.json');
@@ -117,13 +118,25 @@ class FeedService
                     $meta = json_decode($jsonFile->getContent(), true);
                     $channelTitle = $meta['title'] ?? $channelTitle;
                     $channelDesc = $meta['description'] ?? $channelDesc;
+                    $channelAuthor = $meta['author'] ?? $channelAuthor;
                 }
             } catch (\Throwable $e) {
             }
         }
 
-        // Waterfall - Image
-        // TODO: Expose image route? For now, skip.
+        // Waterfall 2: Database Config (UI-based override) - Highest Priority
+        if (!empty($config['title'])) {
+            $channelTitle = $config['title'];
+        }
+        if (!empty($config['description'])) {
+            $channelDesc = $config['description'];
+        }
+        if (!empty($config['author'])) {
+            $channelAuthor = $config['author'];
+        }
+        if (!empty($config['imageUrl'])) {
+            $channelImage = $config['imageUrl'];
+        }
 
         // Scanning
         $items = [];
@@ -135,6 +148,12 @@ class FeedService
         $output .= '<channel>';
         $output .= '<title>' . htmlspecialchars($channelTitle) . '</title>';
         $output .= '<description>' . htmlspecialchars($channelDesc) . '</description>';
+        if ($channelAuthor) {
+            $output .= '<itunes:author>' . htmlspecialchars($channelAuthor) . '</itunes:author>';
+        }
+        if ($channelImage) {
+            $output .= '<itunes:image href="' . htmlspecialchars($channelImage) . '"/>';
+        }
 
         foreach ($items as $item) {
             // $item is File
@@ -166,7 +185,8 @@ class FeedService
         foreach ($nodes as $node) {
             if ($node instanceof File) {
                 $mime = $node->getMimeType();
-                if (str_starts_with($mime, 'audio/')) {
+                // Allow audio, video, and octet-stream (often MP3s with wrong mime)
+                if (str_starts_with($mime, 'audio/') || str_starts_with($mime, 'video/') || $mime === 'application/octet-stream') {
                     $items[] = $node;
                 }
             } elseif ($node instanceof Folder && $recursive) {

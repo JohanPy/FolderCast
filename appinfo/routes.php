@@ -23,6 +23,11 @@ return [
             'verb' => 'POST',
         ],
         [
+            'name' => 'Api#update',
+            'url' => '/api/feeds/{id}',
+            'verb' => 'PUT',
+        ],
+        [
             'name' => 'Api#destroy',
             'url' => '/api/feeds/{id}',
             'verb' => 'DELETE',

@@ -8,6 +8,7 @@ use OCA\FolderCast\Service\FeedService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\DataResponse;
+use OCP\AppFramework\Http\DataDisplayResponse;
 use OCP\AppFramework\Http\StreamResponse;
 use OCP\AppFramework\Http\Response;
 use OCP\IRequest;
@@ -44,10 +45,11 @@ class FeedController extends Controller
             // Actually, DataResponse with setStatus? 
             // Let's use generic Response and setBody.
 
-            $response = new Response();
-            $response->setBody($xml);
-            $response->addHeader('Content-Type', 'application/rss+xml; charset=utf-8');
-            return $response;
+            return new DataDisplayResponse(
+                $xml,
+                Http::STATUS_OK,
+                ['Content-Type' => 'application/rss+xml; charset=utf-8']
+            );
         } catch (\Throwable $e) {
             return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
         }

@@ -24,3 +24,22 @@ Thumbs.db
 .vscode
 *.swp
 *.swo
+
+# Docker / Environment
+docker-compose.yml
+nextcloud_data/
+*.log
+
+# Build Artifacts (Keep specific entry points, ignore chunks/intermediates)
+files.js
+main.js
+dist-main/
+dist-files/
+node_modules/
+package-lock.json
+/vendor-bin/
+/vendor/
+/composer.lock
+*.map
+*.license
+stats.html

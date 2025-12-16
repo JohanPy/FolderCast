@@ -15,6 +15,8 @@ FolderCast is a Nextcloud application designed to generate podcast RSS feeds dir
 *   **💧 Waterfall Config**:
     *   Detects `podcast.json` in the folder for feed metadata.
     *   Detects `cover.jpg` for channel artwork.
+*   **🖼️ Image Support**: Configurable thumbnail URL for each feed.
+*   **📝 Metadata Editor**: Customize podcast title, description, and author directly from the dashboard.
 *   **🚀 Recursive Scanning**: Option to include subfolders in the feed (default: flattened).
 
 ## 🛠️ Installation
@@ -54,13 +56,21 @@ FolderCast is a Nextcloud application designed to generate podcast RSS feeds dir
 
 ## 🏗️ Development
 
-### Setup
+### setup
 ```bash
 git clone ...
 cd foldercast
 composer install
 npm install
 ```
+
+### Docker Environment
+to start a local nextcloud instance with the app enabled:
+```bash
+docker compose up -d
+```
+Access it at http://localhost:8080 (User: admin / Pass: admin).
+The code is mounted live, so changes (php) apply immediately. for vue.js, run `npm run watch`.
 
 ### Building Frontend
 ```bash
