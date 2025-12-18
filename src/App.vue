@@ -158,41 +158,9 @@ export default {
 			
 			try {
                 console.log('FolderCast: Starting podcast creation for', this.newPodcastName);
-				const userId = OC.getCurrentUser().uid
-				const folderName = 'Podcasts/' + this.newPodcastName
-				const davUrl = generateUrl('/remote.php/dav/files/' + userId + '/' + folderName)
-				
-				await axios({
-					method: 'MKCOL',
-					url: generateUrl('/remote.php/dav/files/' + userId + '/Podcasts')
-				}).catch(e => {
-                    if (e.response && e.response.status === 405) return;
-                });
-				
-				await axios({
-					method: 'MKCOL',
-					url: davUrl
-				}).catch(e => {
-                     if (e.response && e.response.status === 405) return;
-                     throw e;
-                });
-				
-				const propfindResponse = await axios({
-					method: 'PROPFIND',
-					url: davUrl,
-					headers: { 'Depth': '0', 'Content-Type': 'application/xml' },
-					data: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:prop><oc:fileid /></d:prop></d:propfind>'
-				})
-				
-				const parser = new DOMParser()
-				const xmlDoc = parser.parseFromString(propfindResponse.data, "text/xml")
-				const fileIdNode = xmlDoc.getElementsByTagName("oc:fileid")[0] || xmlDoc.getElementsByTagName("fileid")[0];
-                
-                if (!fileIdNode) throw new Error('Could not retrieve FileID via WebDAV');
-                const fileId = fileIdNode.textContent;
-
+                // We now let the backend handle the folder creation to avoid WebDAV 401 issues on some environments
 				await axios.post(generateUrl('/apps/foldercast/api/feeds'), {
-					folderId: parseInt(fileId)
+                    podcastName: this.newPodcastName
 				})
 				
                 OC.Notification.showTemporary('Podcast created successfully!');
@@ -201,7 +169,7 @@ export default {
 				
 			} catch (error) {
 				console.error('FolderCast Creation Error:', error)
-				alert('Error creating podcast: ' + (error.message || error))
+				alert('Error creating podcast: ' + (error.response?.data?.error || error.message))
 			} finally {
 				this.processing = false
 			}

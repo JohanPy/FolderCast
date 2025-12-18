@@ -1,10 +1,10 @@
 # Composer
-/vendor
-/composer.lock
+vendor/
+composer.lock
 
 # Node
-/node_modules
-/package-lock.json
+node_modules/
+package-lock.json
 
 # Build Artifacts (Keep standard files, ignore maps if desired, keeping for now)
 # /js
@@ -30,16 +30,12 @@ docker-compose.yml
 nextcloud_data/
 *.log
 
-# Build Artifacts (Keep specific entry points, ignore chunks/intermediates)
+# Build Artifacts
 files.js
 main.js
 dist-main/
 dist-files/
-node_modules/
-package-lock.json
-/vendor-bin/
-/vendor/
-/composer.lock
+build/
 *.map
 *.license
 stats.html

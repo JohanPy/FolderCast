@@ -32,24 +32,19 @@ class FeedController extends Controller
     {
         try {
             $xml = $this->service->getFeed($token);
-            // Check if XML is empty or error?
-            // getFeed throws exception or returns string.
 
-            // We must return string for DataResponse.
-            // However DataResponse usually encodes to JSON.
-            // To return raw content, we should use a different response or just set data and content type?
-            // DataResponse automatically json_encodes if it's an array/object.
-            // If it's a string, it might still double quote it?
-            // Better to use generic Response in this case or ensure raw output.
-            // Nextcloud documentation: use DataDisplayResponse or just StreamResponse with string stream?
-            // Actually, DataResponse with setStatus? 
-            // Let's use generic Response and setBody.
+            // Use StreamResponse with a memory stream to ensure raw output
+            // and avoid any potential middleware interference or data wrapping.
+            $stream = fopen('php://temp', 'r+');
+            fwrite($stream, $xml);
+            rewind($stream);
 
-            return new DataDisplayResponse(
-                $xml,
-                Http::STATUS_OK,
-                ['Content-Type' => 'application/rss+xml; charset=utf-8']
-            );
+            $response = new StreamResponse($stream);
+            $response->addHeader('Content-Type', 'application/rss+xml; charset=utf-8');
+            $response->addHeader('Content-Disposition', 'inline; filename="feed.xml"');
+            $response->addHeader('X-Content-Type-Options', 'nosniff');
+
+            return $response;
         } catch (\Throwable $e) {
             return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
         }

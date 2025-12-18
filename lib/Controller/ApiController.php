@@ -85,16 +85,44 @@ class ApiController extends Controller
 	 * @param array|null $config
 	 * @return DataResponse
 	 */
-	public function create(int $folderId, ?array $config = null): DataResponse
+	public function create(?int $folderId = null, ?array $config = null, ?string $podcastName = null): DataResponse
 	{
 		$user = $this->userSession->getUser();
 		if (!$user) {
 			return new DataResponse([], Http::STATUS_UNAUTHORIZED);
 		}
 
-		// Basic validation: User should have access to folderId
-		// Omitted logic to check if user really sees this folderId for brevity,
-		// but typically we should resolve folderId for user to verify.
+		$userFolder = $this->rootFolder->getUserFolder($user->getUID());
+
+		// Scenario 1: Creating a NEW podcast folder
+		if ($podcastName && !$folderId) {
+			$folderName = 'Podcasts';
+			if (!$userFolder->nodeExists($folderName)) {
+				$userFolder->newFolder($folderName);
+			}
+			$podcastsFolder = $userFolder->get($folderName);
+
+			if (!$podcastsFolder->nodeExists($podcastName)) {
+				$podcastsFolder->newFolder($podcastName);
+			}
+			$targetFolder = $podcastsFolder->get($podcastName);
+			$folderId = $targetFolder->getId();
+		}
+
+		if (!$folderId) {
+			return new DataResponse(['error' => 'Missing folderId or podcastName'], Http::STATUS_BAD_REQUEST);
+		}
+
+		// Basic validation check
+		// Check if user has access to folderId by trying to get it from their root
+		try {
+			$nodes = $userFolder->getById($folderId);
+			if (empty($nodes)) {
+				return new DataResponse(['error' => 'Folder not found or access denied'], Http::STATUS_NOT_FOUND);
+			}
+		} catch (\Exception $e) {
+			return new DataResponse(['error' => 'Invalid folder'], Http::STATUS_BAD_REQUEST);
+		}
 
 		$token = $this->secureRandom->generate(32, ISecureRandom::CHAR_ALPHANUMERIC);
 
