@@ -8,7 +8,6 @@ use OCA\FolderCast\Service\FeedService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\DataResponse;
-use OCP\AppFramework\Http\DataDisplayResponse;
 use OCP\AppFramework\Http\StreamResponse;
 use OCP\AppFramework\Http\Response;
 use OCP\IRequest;
@@ -33,8 +32,6 @@ class FeedController extends Controller
         try {
             $xml = $this->service->getFeed($token);
 
-            // Use StreamResponse with a memory stream to ensure raw output
-            // and avoid any potential middleware interference or data wrapping.
             $stream = fopen('php://temp', 'r+');
             fwrite($stream, $xml);
             rewind($stream);
@@ -66,7 +63,6 @@ class FeedController extends Controller
             $response = new StreamResponse($file->fopen('rb'));
             $response->addHeader('Content-Type', $file->getMimeType());
             $response->addHeader('Content-Length', (string) $file->getSize());
-            // Use inline to allow streaming related behavior in browser, or attachment? Podcast players usually handle it.
             $response->addHeader('Content-Disposition', 'inline; filename="' . $file->getName() . '"');
             return $response;
         } catch (\Throwable $e) {

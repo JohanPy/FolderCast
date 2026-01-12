@@ -9,7 +9,6 @@ use OCA\FolderCast\Db\Feed;
 use OCP\Files\IRootFolder;
 use OCP\Files\Folder;
 use OCP\Files\File;
-use OCP\Files\Node;
 use OCP\ICache;
 use OCP\ICacheFactory;
 use OCP\IURLGenerator;
@@ -167,7 +166,32 @@ class FeedService
             $output .= '<title>' . htmlspecialchars($meta['title']) . '</title>';
             $output .= '<enclosure url="' . htmlspecialchars($downloadUrl) . '" length="' . $item->getSize() . '" type="' . $item->getMimeType() . '" />';
             $output .= '<guid>' . $item->getId() . '</guid>';
-            if ($meta['duration']) {
+
+            if (!empty($meta['date'])) {
+                // Try to parse date, fallback to file mtime if invalid
+                $ts = strtotime($meta['date']);
+                if ($ts === false) {
+                    $ts = $item->getMtime();
+                }
+                $output .= '<pubDate>' . date('r', $ts) . '</pubDate>';
+            } else {
+                $output .= '<pubDate>' . date('r', $item->getMtime()) . '</pubDate>';
+            }
+
+            if (!empty($meta['description'])) {
+                $output .= '<description>' . htmlspecialchars($meta['description']) . '</description>';
+                $output .= '<itunes:summary>' . htmlspecialchars($meta['description']) . '</itunes:summary>';
+            }
+
+            if (!empty($meta['artist'])) {
+                $output .= '<itunes:author>' . htmlspecialchars($meta['artist']) . '</itunes:author>';
+            }
+
+            if (!empty($meta['url'])) {
+                $output .= '<link>' . htmlspecialchars($meta['url']) . '</link>';
+            }
+
+            if (!empty($meta['duration'])) {
                 $output .= '<itunes:duration>' . $meta['duration'] . '</itunes:duration>';
             }
             $output .= '</item>';

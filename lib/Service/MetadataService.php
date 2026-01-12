@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace OCA\FolderCast\Service;
 
 use OCP\Files\File;
-use OCP\Files\Node;
 use Psr\Log\LoggerInterface;
 
 class MetadataService
@@ -30,24 +29,34 @@ class MetadataService
         ];
 
         if (!class_exists(\getID3::class)) {
-            // Fallback if dependency is missing
+            // Try to load composer autoloader if not already loaded
+            // Internal vendor folder (from make)
+            $autoloadPath = __DIR__ . '/../../vendor/autoload.php';
+            if (file_exists($autoloadPath)) {
+                require_once $autoloadPath;
+            }
+        }
+
+        if (!class_exists(\getID3::class)) {
+            $this->logger->warning('FolderCast: getID3 class not found. Metadata extraction skipped.');
             return $data;
         }
 
         try {
             // getID3 requires a local file path.
-            // getLocalFile() ensures we have a local copy (e.g. from object store)
-            // CAUTION: This can be slow for large files on external storage.
+            // IMPORTANT: getLocalFile() may return a SHARED temp path that gets overwritten.
+            // We must copy the content to a unique temp file for reliable analysis.
             $localPath = null;
+            $tempFile = null;
+
             try {
-                // Try to get local path without downloading if possible (e.g. local storage)
-                // But Node doesn't expose underlying storage path easily safely.
-                // For now rely on getLocalFile which might be expensive.
-                // Optimization: We could read just the header bytes?
-                // getID3 has an option to analyze from stream/string, but it's complex.
-                $localPath = $file->getLocalFile();
+                // Create a unique temp file for this specific analysis
+                $tempFile = sys_get_temp_dir() . '/foldercast_' . $file->getId() . '_' . uniqid() . '.tmp';
+                $content = $file->getContent();
+                file_put_contents($tempFile, $content);
+                $localPath = $tempFile;
             } catch (\Exception $e) {
-                $this->logger->warning('Could not get local file for ID3 analysis: ' . $e->getMessage());
+                $this->logger->warning('Could not create temp file for ID3 analysis: ' . $e->getMessage());
                 return $data;
             }
 
@@ -57,9 +66,22 @@ class MetadataService
 
             if (isset($fileInfo['comments_html'])) {
                 $comments = $fileInfo['comments_html'];
+
                 $data['title'] = $comments['title'][0] ?? $file->getName();
                 $data['artist'] = $comments['artist'][0] ?? null;
                 $data['album'] = $comments['album'][0] ?? null;
+
+                // URL: Try standard comment, fallback to COMM frame in id3v2 if needed
+                $data['url'] = $comments['comment'][0] ?? null;
+
+                // Description: Try standard lyrics, fallback to USLT raw frame
+                $data['description'] = $comments['unsynchronised_lyric'][0] ?? ($comments['description'][0] ?? null);
+                if (empty($data['description']) && !empty($fileInfo['id3v2']['USLT'][0]['data'])) {
+                    $data['description'] = $fileInfo['id3v2']['USLT'][0]['data'];
+                }
+
+                // Date logic
+                $data['date'] = $comments['recording_time'][0] ?? ($comments['date'][0] ?? ($comments['year'][0] ?? null));
             }
 
             if (isset($fileInfo['playtime_seconds'])) {
@@ -75,6 +97,11 @@ class MetadataService
 
         } catch (\Throwable $e) {
             $this->logger->error('Error parsing ID3 tags: ' . $e->getMessage());
+        } finally {
+            // Clean up temp file
+            if (isset($tempFile) && file_exists($tempFile)) {
+                @unlink($tempFile);
+            }
         }
 
         return $data;
