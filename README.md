@@ -54,6 +54,65 @@ FolderCast is a Nextcloud application designed to generate podcast RSS feeds dir
 5.  Copy the generated RSS Link.
 6.  Paste it into your Podcast player.
 
+## 🎵 Audio File Format Requirements
+
+FolderCast automatically detects and processes audio files for podcasting. Here's what you need to know about file formats and metadata:
+
+### Supported File Types
+*   **Audio formats**: Any file with MIME type starting with `audio/` (MP3, M4A, OGG, FLAC, etc.)
+*   **Video formats**: Any file with MIME type starting with `video/` (MP4, MKV, etc.)
+*   **Fallback**: Files with MIME type `application/octet-stream` (often MP3 files with incorrect MIME detection)
+
+### ID3 Tags (Metadata)
+
+FolderCast uses the **getID3** library to extract metadata from audio files. The following ID3 tags are recognized:
+
+#### Required Tags (fallback to defaults if missing)
+*   **Title** (`TIT2` in ID3v2): Episode title
+    *   Fallback: Uses the filename if tag is missing
+*   **Duration**: Automatically calculated from the audio stream
+    *   Fallback: 0 if detection fails
+
+#### Optional Tags
+*   **Artist** (`TPE1` in ID3v2): Episode author
+    *   Maps to `<itunes:author>` in RSS feed
+*   **Album** (`TALB` in ID3v2): Album name
+    *   Currently extracted but not used in RSS feed
+*   **Description** (`USLT` - Unsynchronized Lyrics in ID3v2): Episode description
+    *   Maps to `<description>` and `<itunes:summary>` in RSS feed
+    *   Fallback: Tries `description` tag or `USLT` frame data
+*   **Comment** (`COMM` in ID3v2): Episode URL/link
+    *   Maps to `<link>` in RSS feed
+*   **Date/Year** (`TDRC`/`TDOR`/`TYER` in ID3v2): Publication date
+    *   Tries `recording_time`, then `date`, then `year`
+    *   Fallback: File modification time if all are missing
+*   **Cover Art** (`APIC` in ID3v2): Episode artwork
+    *   Detected via `picture` comment from getID3
+    *   Currently detected but not extracted to RSS (feature in progress)
+
+### File Size and Quality Recommendations
+*   **No strict size limits**, but smaller files load faster in podcast apps
+*   **Recommended bitrate**: 128-192 kbps for voice, 256 kbps for music
+*   **Sample rate**: 44.1 kHz or 48 kHz
+
+### Example: Properly Tagged MP3 File
+
+```
+Title:       "Episode 1: Introduction"
+Artist:      "John Doe"
+Album:       "My Podcast Series"
+Comment:     "https://example.com/episode1"
+Description: "In this episode, we discuss..."
+Date:        "2024-01-15"
+Duration:    1234 seconds (auto-detected)
+Cover Art:   Embedded JPEG/PNG image
+```
+
+### Notes
+*   Files **without ID3 tags** will still work—the filename becomes the title
+*   **Editing metadata**: You can edit ID3 tags using tools like [Kid3](https://kid3.kde.org/) or [MP3Tag](https://www.mp3tag.de/)
+*   **Batch processing**: Consider using [EasyTAG](https://wiki.gnome.org/Apps/EasyTAG) for bulk metadata editing
+
 ## 🏗️ Development
 
 ### setup

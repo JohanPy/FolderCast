@@ -2,6 +2,9 @@
 
 ## 🚀 Backlog
 
+- [ ] **Cover Art**: Extract and include cover art from ID3 tags in the RSS feed.
+- [ ] **Autoremove**: Option to automatically remove files from the feed after a certain date or after being played.
+- [ ] **Host logo**: Allow users to set a custom logo for the podcast feed and host it on Nextcloud.
 - [ ] **Metadata Editor**: A Vue.js modal to edit ID3 tags or `podcast.json` directly from Nextcloud.
 - [ ] **Smart Feeds**: Create dynamic feeds based on Nextcloud Tags (e.g. "To Listen") instead of folders.
 - [ ] **File Hooks**: Listen to file create/update/delete events to invalidate the RSS cache immediately.
