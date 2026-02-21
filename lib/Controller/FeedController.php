@@ -64,7 +64,63 @@ class FeedController extends Controller
             $response->addHeader('Content-Type', $file->getMimeType());
             $response->addHeader('Content-Length', (string) $file->getSize());
             $response->addHeader('Content-Disposition', 'inline; filename="' . $file->getName() . '"');
+            $response->addHeader('Pragma', 'public');
+
             return $response;
+        } catch (\Throwable $e) {
+            return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+        }
+    }
+
+    /**
+     * @NoAdminRequired
+     * @NoCSRFRequired
+     * @PublicPage
+     */
+    public function logo(string $token): Response
+    {
+        try {
+            $file = $this->service->getLogoFile($token);
+            if (!$file) {
+                // Return 404 or maybe a default image?
+                return new DataResponse([], Http::STATUS_NOT_FOUND);
+            }
+
+            $response = new StreamResponse($file->fopen('rb'));
+            $response->addHeader('Content-Type', $file->getMimeType());
+            $response->addHeader('Cache-Control', 'public, max-age=86400');
+            $response->addHeader('Pragma', 'public');
+            return $response;
+
+        } catch (\Throwable $e) {
+            return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
+        }
+    }
+
+    /**
+     * @NoAdminRequired
+     * @NoCSRFRequired
+     * @PublicPage
+     */
+    public function cover(string $token, int $fileId): Response
+    {
+        try {
+            $cover = $this->service->getCover($token, $fileId);
+            if (!$cover) {
+                return new DataResponse([], Http::STATUS_NOT_FOUND);
+            }
+
+            $stream = fopen('php://memory', 'r+');
+            fwrite($stream, $cover['data']);
+            rewind($stream);
+
+            $response = new StreamResponse($stream);
+            $response->addHeader('Content-Type', $cover['mime']);
+            $response->addHeader('Content-Length', (string) strlen($cover['data']));
+            $response->addHeader('Cache-Control', 'public, max-age=86400');
+            $response->addHeader('Pragma', 'public');
+            return $response;
+
         } catch (\Throwable $e) {
             return new DataResponse(['error' => $e->getMessage()], Http::STATUS_NOT_FOUND);
         }

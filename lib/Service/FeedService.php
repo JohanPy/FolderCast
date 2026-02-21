@@ -39,6 +39,11 @@ class FeedService
         $this->logger = $logger;
     }
 
+    public function getMetadataService(): MetadataService
+    {
+        return $this->metadataService;
+    }
+
     public function getFeed(string $token): string
     {
         $cacheKey = 'feed_xml_' . $token;
@@ -51,6 +56,19 @@ class FeedService
 
         $this->cache->set($cacheKey, $xml, 3600); // 1 hour TTL default
         return $xml;
+    }
+
+    public function clearCache(string $token): void
+    {
+        $cacheKey = 'feed_xml_' . $token;
+        $this->logger->info("FolderCast: Clearing cache for key: $cacheKey");
+        $this->cache->remove($cacheKey);
+        // Verify removal
+        if ($this->cache->get($cacheKey)) {
+            $this->logger->error("FolderCast: Cache key still exists after removal: $cacheKey");
+        } else {
+            $this->logger->info("FolderCast: Cache key removed successfully: $cacheKey");
+        }
     }
 
     public function getFile(string $token, int $fileId): ?File
@@ -87,6 +105,35 @@ class FeedService
         return $file;
     }
 
+    public function getLogoFile(string $token): ?File
+    {
+        $feed = $this->mapper->findByToken($token);
+        $config = json_decode($feed->getConfiguration() ?? '{}', true);
+
+        if (empty($config['logoFileId'])) {
+            return null;
+        }
+
+        $userFolder = $this->rootFolder->getUserFolder($feed->getUserId());
+        $nodes = $userFolder->getById($config['logoFileId']);
+
+        if (empty($nodes)) {
+            return null;
+        }
+
+        return $nodes[0];
+        return $nodes[0];
+    }
+
+    public function getCover(string $token, int $fileId): ?array
+    {
+        $file = $this->getFile($token, $fileId);
+        if (!$file) {
+            return null;
+        }
+        return $this->metadataService->getCover($file);
+    }
+
     private function generateXml(Feed $feed): string
     {
         $userFolder = $this->rootFolder->getUserFolder($feed->getUserId());
@@ -102,6 +149,29 @@ class FeedService
         // Config Logic
         $config = json_decode($feed->getConfiguration() ?? '{}', true);
         $flatten = $config['flatten'] ?? true;
+        $autoremoveDays = (int) ($config['autoremoveDays'] ?? 0);
+
+        // Autoremove Cleanup Logic
+        if ($autoremoveDays > 0) {
+            $allNodes = $folder->getDirectoryListing(); // Shallow scan for cleanup
+            foreach ($allNodes as $node) {
+                if ($node instanceof File) {
+                    $mtime = $node->getMtime();
+                    // Check if file is older than N days
+                    if (time() - $mtime > $autoremoveDays * 86400) {
+                        // Avoid deleting the config file or logo
+                        if ($node->getName() === 'podcast.json' || str_starts_with($node->getName(), '_logo.')) {
+                            continue;
+                        }
+                        try {
+                            $node->delete();
+                        } catch (\Throwable $e) {
+                            $this->logger->error('FolderCast Autoremove failed for ' . $node->getPath() . ': ' . $e->getMessage());
+                        }
+                    }
+                }
+            }
+        }
 
         // Default Metadata (Folder Name)
         $channelTitle = $folder->getName();
@@ -133,8 +203,16 @@ class FeedService
         if (!empty($config['author'])) {
             $channelAuthor = $config['author'];
         }
-        if (!empty($config['imageUrl'])) {
-            $channelImage = $config['imageUrl'];
+
+        // Logo logic: prioritized local file > remote url
+        $logoUrl = null;
+        if (!empty($config['logoFileId'])) {
+            $logoUrl = $this->urlGenerator->linkToRouteAbsolute('foldercast.feed.logo', [
+                'token' => $feed->getToken(),
+                'v' => $config['logoFileId'] // Cache busting
+            ]);
+        } elseif (!empty($config['imageUrl'])) {
+            $logoUrl = $config['imageUrl'];
         }
 
         // Scanning
@@ -150,8 +228,9 @@ class FeedService
         if ($channelAuthor) {
             $output .= '<itunes:author>' . htmlspecialchars($channelAuthor) . '</itunes:author>';
         }
-        if ($channelImage) {
-            $output .= '<itunes:image href="' . htmlspecialchars($channelImage) . '"/>';
+        if ($logoUrl) {
+            $output .= '<itunes:image href="' . htmlspecialchars($logoUrl) . '"/>';
+            $output .= '<image><url>' . htmlspecialchars($logoUrl) . '</url><title>' . htmlspecialchars($channelTitle) . '</title></image>';
         }
 
         foreach ($items as $item) {
@@ -176,6 +255,14 @@ class FeedService
                 $output .= '<pubDate>' . date('r', $ts) . '</pubDate>';
             } else {
                 $output .= '<pubDate>' . date('r', $item->getMtime()) . '</pubDate>';
+            }
+
+            if (!empty($meta['has_cover'])) {
+                $coverUrl = $this->urlGenerator->linkToRouteAbsolute('foldercast.feed.cover', [
+                    'token' => $feed->getToken(),
+                    'fileId' => $item->getId()
+                ]);
+                $output .= '<itunes:image href="' . htmlspecialchars($coverUrl) . '"/>';
             }
 
             if (!empty($meta['description'])) {

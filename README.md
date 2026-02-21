@@ -15,7 +15,8 @@ FolderCast is a Nextcloud application designed to generate podcast RSS feeds dir
 *   **💧 Waterfall Config**:
     *   Detects `podcast.json` in the folder for feed metadata.
     *   Detects `cover.jpg` for channel artwork.
-*   **🖼️ Image Support**: Configurable thumbnail URL for each feed.
+*   **🖼️ Host Logo & Episode Artwork**: Upload a custom podcast logo, or use a URL. Extracts individual episode cover art from MP3 ID3 tags.
+*   **🗑️ Autoremove**: Automatically delete episodes from disk that are older than a configured number of days.
 *   **📝 Metadata Editor**: Customize podcast title, description, and author directly from the dashboard.
 *   **🚀 Recursive Scanning**: Option to include subfolders in the feed (default: flattened).
 
@@ -88,7 +89,7 @@ FolderCast uses the **getID3** library to extract metadata from audio files. The
     *   Fallback: File modification time if all are missing
 *   **Cover Art** (`APIC` in ID3v2): Episode artwork
     *   Detected via `picture` comment from getID3
-    *   Currently detected but not extracted to RSS (feature in progress)
+    *   Extracted and served as `<itunes:image>` in the RSS feed
 
 ### File Size and Quality Recommendations
 *   **No strict size limits**, but smaller files load faster in podcast apps

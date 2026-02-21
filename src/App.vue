@@ -46,8 +46,17 @@
                     <label>Author</label>
 					<input v-model="editForm.author" type="text" placeholder="Author Name" />
 
-                    <label>Image URL (Thumbnail)</label>
-                    <input v-model="editForm.imageUrl" type="text" placeholder="https://example.com/image.jpg" />
+                    <label>Podcast Logo</label>
+                    <div class="logo-upload">
+                        <img v-if="logoPreview || editForm.imageUrl" :src="logoPreview || editForm.imageUrl" class="logo-preview" />
+                        <input type="file" accept="image/*" @change="onLogoSelected" />
+                        <small>Or enter a URL manually:</small>
+                        <input v-model="editForm.imageUrl" type="text" placeholder="https://example.com/image.jpg" />
+                    </div>
+
+                    <label>Auto-remove after (days)</label>
+                    <input v-model.number="editForm.autoremoveDays" type="number" min="0" placeholder="0 = disabled" />
+                    <small>Episodes older than this many days will be DELETE from disk.</small>
 
 					<div class="actions">
 						<button @click="saveEdit" :disabled="processing" class="primary">Save Changes</button>
@@ -104,8 +113,11 @@ export default {
                 title: '',
                 description: '',
                 author: '',
-                imageUrl: ''
+                imageUrl: '',
+                autoremoveDays: 0
             },
+            logoFile: null,
+            logoPreview: null,
 			processing: false
 		}
 	},
@@ -120,7 +132,9 @@ export default {
             this.activeModal = null;
             this.selectedFeed = null;
             this.newPodcastName = '';
-            this.editForm = { title: '', description: '', author: '', imageUrl: '' };
+            this.editForm = { title: '', description: '', author: '', imageUrl: '', autoremoveDays: 0 };
+            this.logoFile = null;
+            this.logoPreview = null;
         },
         openDelete(feed) {
             this.selectedFeed = feed;
@@ -133,9 +147,21 @@ export default {
                 title: config.title || '',
                 description: config.description || '',
                 author: config.author || '',
-                imageUrl: config.imageUrl || ''
+                imageUrl: config.imageUrl || '',
+                autoremoveDays: config.autoremoveDays || 0
             };
+            this.logoFile = null;
+            this.logoPreview = null;
+            if (config.logoFileId) {
+                 this.logoPreview = this.getFeedUrl(feed.token).replace('/feed/', '/feed/') + '/logo?v=' + config.logoFileId;
+            }
             this.openModal('edit');
+        },
+        onLogoSelected(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            this.logoFile = file;
+            this.logoPreview = URL.createObjectURL(file);
         },
 		fetchFeeds() {
 			this.loading = true
@@ -158,7 +184,6 @@ export default {
 			
 			try {
                 console.log('FolderCast: Starting podcast creation for', this.newPodcastName);
-                // We now let the backend handle the folder creation to avoid WebDAV 401 issues on some environments
 				await axios.post(generateUrl('/apps/foldercast/api/feeds'), {
                     podcastName: this.newPodcastName
 				})
@@ -193,25 +218,37 @@ export default {
                     this.processing = false;
                 })
 		},
-        saveEdit() {
+        async saveEdit() {
             if (!this.selectedFeed) return;
             this.processing = true;
             
-            axios.put(generateUrl('/apps/foldercast/api/feeds/' + this.selectedFeed.id), {
-                configuration: this.editForm
-            })
-            .then(() => {
+            try {
+                // 1. Upload Logo if selected
+                if (this.logoFile) {
+                    const formData = new FormData();
+                    formData.append('logo', this.logoFile);
+                    await axios.post(
+                        generateUrl('/apps/foldercast/api/feeds/' + this.selectedFeed.id + '/logo'),
+                        formData,
+                        { headers: { 'Content-Type': 'multipart/form-data' } }
+                    );
+                }
+
+                // 2. Update Config
+                await axios.put(generateUrl('/apps/foldercast/api/feeds/' + this.selectedFeed.id), {
+                    configuration: this.editForm
+                });
+
                 OC.Notification.showTemporary('Feed updated');
                 this.closeModal();
                 this.fetchFeeds();
-            })
-            .catch((error) => {
+
+            } catch (error) {
                 console.error(error);
-                alert('Error updating feed');
-            })
-            .finally(() => {
+                alert('Error updating feed: ' + (error.response?.data?.error || error.message));
+            } finally {
                 this.processing = false;
-            });
+            }
         }
 	}
 }
@@ -296,5 +333,19 @@ button {
 .danger:hover {
     background-color: var(--color-error);
     color: white;
+}
+.logo-preview {
+    max-width: 100px;
+    max-height: 100px;
+    display: block;
+    margin-bottom: 5px;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+}
+.logo-upload {
+    margin-bottom: 10px;
+    padding: 10px;
+    border: 1px dashed var(--color-border);
+    border-radius: 4px;
 }
 </style>

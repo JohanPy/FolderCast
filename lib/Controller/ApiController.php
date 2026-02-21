@@ -15,12 +15,15 @@ use OCP\Security\ISecureRandom;
 use OCP\Files\IRootFolder;
 use OCP\Files\Folder;
 
+use OCA\FolderCast\Service\FeedService;
+
 class ApiController extends Controller
 {
 	private FeedMapper $mapper;
 	private IUserSession $userSession;
 	private ISecureRandom $secureRandom;
 	private IRootFolder $rootFolder;
+	private FeedService $feedService;
 
 	public function __construct(
 		string $appName,
@@ -28,13 +31,15 @@ class ApiController extends Controller
 		FeedMapper $mapper,
 		IUserSession $userSession,
 		ISecureRandom $secureRandom,
-		IRootFolder $rootFolder
+		IRootFolder $rootFolder,
+		FeedService $feedService
 	) {
 		parent::__construct($appName, $request);
 		$this->mapper = $mapper;
 		$this->userSession = $userSession;
 		$this->secureRandom = $secureRandom;
 		$this->rootFolder = $rootFolder;
+		$this->feedService = $feedService;
 	}
 
 	/**
@@ -166,13 +171,10 @@ class ApiController extends Controller
 		$feed->setConfiguration(json_encode($newConfig));
 
 		$this->mapper->update($feed);
+		$this->feedService->clearCache($feed->getToken());
 		return new DataResponse($feed);
 	}
 
-	/**
-	 * @param int $id
-	 * @return DataResponse
-	 */
 	public function destroy(int $id): DataResponse
 	{
 		$user = $this->userSession->getUser();
@@ -191,6 +193,78 @@ class ApiController extends Controller
 		}
 
 		$this->mapper->delete($feed);
+		$this->feedService->clearCache($feed->getToken());
 		return new DataResponse([]);
+	}
+
+	/**
+	 * @param int $id
+	 * @return DataResponse
+	 */
+	public function uploadLogo(int $id): DataResponse
+	{
+		$user = $this->userSession->getUser();
+		if (!$user) {
+			return new DataResponse([], Http::STATUS_UNAUTHORIZED);
+		}
+
+		try {
+			$feed = $this->mapper->find($id);
+		} catch (\Exception $e) {
+			return new DataResponse([], Http::STATUS_NOT_FOUND);
+		}
+
+		if ($feed->getUserId() !== $user->getUID()) {
+			return new DataResponse([], Http::STATUS_FORBIDDEN);
+		}
+
+		$uploadedFile = $this->request->getUploadedFile('logo');
+		if (!$uploadedFile) {
+			return new DataResponse(['error' => 'No file uploaded'], Http::STATUS_BAD_REQUEST);
+		}
+
+		$userFolder = $this->rootFolder->getUserFolder($user->getUID());
+		$nodes = $userFolder->getById($feed->getFolderId());
+		if (empty($nodes)) {
+			return new DataResponse(['error' => 'Feed folder not found'], Http::STATUS_NOT_FOUND);
+		}
+		$folder = $nodes[0];
+		if (!($folder instanceof Folder)) {
+			return new DataResponse(['error' => 'Invalid folder'], Http::STATUS_INTERNAL_SERVER_ERROR);
+		}
+
+		// Save file as hidden file inside the folder
+		// We use a fixed name pattern or unique one? Let's use _logo.<ext>
+		// Check file extension
+		$originalName = $uploadedFile['name'] ?? 'logo.jpg';
+		$ext = pathinfo($originalName, PATHINFO_EXTENSION);
+		$targetName = '_logo.' . $ext;
+
+		try {
+			if ($folder->nodeExists($targetName)) {
+				$file = $folder->get($targetName);
+				if ($file instanceof \OCP\Files\File) {
+					$file->delete();
+				}
+			}
+			$file = $folder->newFile($targetName);
+			$stream = fopen($uploadedFile['tmp_name'], 'rb');
+			$file->putContent($stream);
+			if (is_resource($stream)) {
+				fclose($stream);
+			}
+
+			// Update config
+			$config = json_decode($feed->getConfiguration() ?? '{}', true);
+			$config['logoFileId'] = $file->getId();
+			$feed->setConfiguration(json_encode($config));
+			$this->mapper->update($feed);
+
+			$this->feedService->clearCache($feed->getToken());
+
+			return new DataResponse(['fileId' => $file->getId()]);
+		} catch (\Throwable $e) {
+			return new DataResponse(['error' => $e->getMessage()], Http::STATUS_INTERNAL_SERVER_ERROR);
+		}
 	}
 }
