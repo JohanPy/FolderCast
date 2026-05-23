@@ -124,6 +124,17 @@ composer install
 npm install
 ```
 
+### Quick Daily Workflow
+Use these commands to keep a healthy dev loop even if PHP/Composer are not installed locally:
+
+```bash
+make doctor
+make test-php
+make test-js
+# or all at once
+make test-all
+```
+
 ### Docker Environment
 to start a local nextcloud instance with the app enabled:
 ```bash

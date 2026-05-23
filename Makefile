@@ -71,3 +71,22 @@ appstore: clean composer npm
 	. $(source_dir)/$(app_name)
 	tar -czf $(appstore_dir)/$(app_name)-$(version).tar.gz -C $(source_dir) $(app_name)
 	@echo "Archive created at $(appstore_dir)/$(app_name)-$(version).tar.gz"
+
+.PHONY: doctor test-php test-js test-all
+
+doctor:
+	@echo "Branch: $$(git branch --show-current)"
+	@if find .git -name '*conflicted copy*' -print | grep -q . ; then \
+		echo "ERROR: conflicted copy files are still present in .git"; \
+		exit 1; \
+	fi
+	@echo "Git sanity: OK"
+
+test-php:
+	docker run --rm -v $(CURDIR):/app -w /app php:8.3-cli sh -lc "find lib appinfo -name '*.php' -print0 | xargs -0 -n1 php -l"
+	$(COMPOSER_CMD) test:unit
+
+test-js:
+	docker run --rm --user $$(id -u):$$(id -g) -v $(CURDIR):/app -w /app node:22 sh -lc "npm ci --legacy-peer-deps && npm run build"
+
+test-all: doctor test-php test-js
