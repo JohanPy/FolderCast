@@ -72,7 +72,7 @@ appstore: clean composer npm
 	tar -czf $(appstore_dir)/$(app_name)-$(version).tar.gz -C $(source_dir) $(app_name)
 	@echo "Archive created at $(appstore_dir)/$(app_name)-$(version).tar.gz"
 
-.PHONY: doctor test-php test-js test-all
+.PHONY: all clean composer npm appstore doctor test-php test-js test-all lint-php
 
 doctor:
 	@echo "Branch: $$(git branch --show-current)"
@@ -81,6 +81,9 @@ doctor:
 		exit 1; \
 	fi
 	@echo "Git sanity: OK"
+
+lint-php:
+	$(COMPOSER_CMD) psalm
 
 test-php:
 	docker run --rm -v $(CURDIR):/app -w /app php:8.3-cli sh -lc "find lib appinfo -name '*.php' -print0 | xargs -0 -n1 php -l"

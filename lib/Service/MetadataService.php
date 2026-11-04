@@ -5,19 +5,31 @@ declare(strict_types=1);
 namespace OCA\FolderCast\Service;
 
 use OCP\Files\File;
+use OCP\ICache;
+use OCP\ICacheFactory;
 use Psr\Log\LoggerInterface;
 
 class MetadataService
 {
     private LoggerInterface $logger;
+    private ?ICache $cache;
 
-    public function __construct(LoggerInterface $logger)
+    public function __construct(LoggerInterface $logger, ?ICacheFactory $cacheFactory = null)
     {
         $this->logger = $logger;
+        $this->cache = $cacheFactory !== null ? $cacheFactory->createDistributed('foldercast_meta') : null;
     }
 
     public function getMetadata(File $file): array
     {
+        $cacheKey = sprintf('meta_v1_%d_%d_%d', $file->getId(), $file->getMtime(), $file->getSize());
+        if ($this->cache !== null) {
+            $cached = $this->cache->get($cacheKey);
+            if (is_array($cached)) {
+                return $cached;
+            }
+        }
+
         $data = [
             'title' => $file->getName(),
             'artist' => null,
@@ -31,40 +43,51 @@ class MetadataService
 
         $fileInfo = $this->analyzeFile($file);
         if (empty($fileInfo)) {
+            if ($this->cache !== null) {
+                $this->cache->set($cacheKey, $data, 2592000); // 30 days
+            }
             return $data;
         }
 
-        if (isset($fileInfo['comments_html'])) {
-            $comments = $fileInfo['comments_html'];
+        // Read from raw UTF-8 comments rather than HTML-encoded comments_html
+        $comments = $fileInfo['comments'] ?? [];
 
-            $data['title'] = $comments['title'][0] ?? $file->getName();
-            $data['artist'] = $comments['artist'][0] ?? null;
-            $data['album'] = $comments['album'][0] ?? null;
+        if (!empty($comments)) {
+            $rawTitle = $this->extractFirstComment($comments, ['title']);
+            $data['title'] = $rawTitle !== null ? $rawTitle : $file->getName();
 
-            // URL: Try standard comment, fallback to COMM frame in id3v2 if needed
-            $data['url'] = $comments['comment'][0] ?? null;
+            $data['artist'] = $this->extractFirstComment($comments, ['artist', 'composer', 'band']);
+            $data['album'] = $this->extractFirstComment($comments, ['album']);
 
-            // Description: Try standard lyrics, fallback to USLT raw frame
-            $data['description'] = $comments['unsynchronised_lyric'][0] ?? ($comments['description'][0] ?? null);
-            if (empty($data['description']) && !empty($fileInfo['id3v2']['USLT'][0]['data'])) {
-                $data['description'] = $fileInfo['id3v2']['USLT'][0]['data'];
+            // URL: Try standard comment or url
+            $data['url'] = $this->extractFirstComment($comments, ['comment', 'url']);
+
+            // Description: Try standard lyrics/description, fallback to USLT raw frame
+            $rawDesc = $this->extractFirstComment($comments, ['unsynchronised_lyric', 'description', 'comment']);
+            if ($rawDesc === null && !empty($fileInfo['id3v2']['USLT'][0]['data'])) {
+                $rawDesc = trim((string)$fileInfo['id3v2']['USLT'][0]['data']);
+                if ($rawDesc === '') {
+                    $rawDesc = null;
+                }
             }
+            $data['description'] = $rawDesc;
 
             // Date logic
-            $data['date'] = $comments['recording_time'][0] ?? ($comments['date'][0] ?? ($comments['year'][0] ?? null));
+            $data['date'] = $this->extractFirstComment($comments, ['recording_time', 'date', 'year']);
         }
 
         if (isset($fileInfo['playtime_seconds'])) {
             $data['duration'] = (int) $fileInfo['playtime_seconds'];
         }
 
-        // Detect cover using specific logic if needed, or getID3's detection
-        // getID3 puts entries in 'comments' -> 'picture'
         if (!empty($fileInfo['comments']['picture'])) {
             $data['has_cover'] = true;
         } elseif (!empty($fileInfo['id3v2']['APIC'])) {
-            // Fallback for some APIC frames not mapped to comments
             $data['has_cover'] = true;
+        }
+
+        if ($this->cache !== null) {
+            $this->cache->set($cacheKey, $data, 2592000); // 30 days
         }
 
         return $data;
@@ -72,35 +95,66 @@ class MetadataService
 
     public function getCover(File $file): ?array
     {
+        $cacheKey = sprintf('cover_v1_%d_%d', $file->getId(), $file->getMtime());
+        if ($this->cache !== null) {
+            $cached = $this->cache->get($cacheKey);
+            if (is_array($cached)) {
+                return $cached;
+            }
+        }
+
         $fileInfo = $this->analyzeFile($file);
         if (empty($fileInfo)) {
             return null;
         }
 
+        $cover = null;
         if (!empty($fileInfo['comments']['picture'])) {
             $picture = $fileInfo['comments']['picture'][0];
-            return [
+            $cover = [
                 'data' => $picture['data'],
                 'mime' => $picture['image_mime'] ?? 'image/jpeg',
             ];
-        }
-
-        if (!empty($fileInfo['id3v2']['APIC'])) {
+        } elseif (!empty($fileInfo['id3v2']['APIC'])) {
             $picture = $fileInfo['id3v2']['APIC'][0];
-            return [
+            $cover = [
                 'data' => $picture['data'],
                 'mime' => $picture['image_mime'] ?? 'image/jpeg',
             ];
         }
 
+        if ($cover !== null && $this->cache !== null && strlen($cover['data']) <= 512 * 1024) {
+            $this->cache->set($cacheKey, $cover, 2592000); // 30 days
+        }
+
+        return $cover;
+    }
+
+    /**
+     * @param array<string, mixed> $comments
+     * @param string[] $keys
+     */
+    private function extractFirstComment(array $comments, array $keys): ?string
+    {
+        foreach ($keys as $key) {
+            if (!isset($comments[$key])) {
+                continue;
+            }
+            $val = $comments[$key];
+            if (is_array($val)) {
+                $val = $val[0] ?? '';
+            }
+            $trimmed = trim((string)$val);
+            if ($trimmed !== '') {
+                return $trimmed;
+            }
+        }
         return null;
     }
 
     private function analyzeFile(File $file): array
     {
         if (!class_exists(\getID3::class)) {
-            // Try to load composer autoloader if not already loaded
-            // Internal vendor folder (from make)
             $autoloadPath = __DIR__ . '/../../vendor/autoload.php';
             if (file_exists($autoloadPath)) {
                 require_once $autoloadPath;
@@ -112,29 +166,71 @@ class MetadataService
             return [];
         }
 
+        $localPath = null;
+        $createdTempFile = false;
         $tempFile = null;
-        try {
-            // Create a unique temp file for this specific analysis
-            $tempFile = sys_get_temp_dir() . '/foldercast_' . $file->getId() . '_' . uniqid() . '.tmp';
 
-            // Use streaming to avoid loading entire file into memory (OOM risk)
-            $source = $file->fopen('rb');
-            $dest = fopen($tempFile, 'wb');
-            stream_copy_to_stream($source, $dest);
-            fclose($source);
-            fclose($dest);
+        try {
+            // Attempt to get the local file path directly without copying
+            try {
+                $storage = $file->getStorage();
+                if ($storage !== null && method_exists($storage, 'getLocalFile')) {
+                    $path = $storage->getLocalFile($file->getInternalPath());
+                    if (is_string($path) && file_exists($path)) {
+                        $localPath = $path;
+                    }
+                }
+            } catch (\Throwable $e) {
+                $localPath = null;
+            }
+
+            if ($localPath === null) {
+                // Fallback: Copy to unique temp file
+                $createdTempFile = true;
+                $tempFile = sys_get_temp_dir() . '/foldercast_' . $file->getId() . '_' . uniqid() . '.tmp';
+                $source = null;
+                $dest = null;
+                try {
+                    $source = $file->fopen('rb');
+                    $dest = fopen($tempFile, 'wb');
+                    if ($source !== false && $dest !== false) {
+                        stream_copy_to_stream($source, $dest);
+                    }
+                } finally {
+                    if (is_resource($source)) {
+                        fclose($source);
+                    }
+                    if (is_resource($dest)) {
+                        fclose($dest);
+                    }
+                }
+                $localPath = $tempFile;
+            }
+
+            if (!file_exists($localPath)) {
+                return [];
+            }
 
             $getID3 = new \getID3();
-            $fileInfo = $getID3->analyze($tempFile);
+            $getID3->option_tag_id3v1 = true;
+            $getID3->option_tag_id3v2 = true;
+            $getID3->option_tag_lyrics3 = false;
+            $getID3->option_tag_apetag = true;
+            $getID3->option_tags_process = true;
+            $getID3->option_tags_html = false; // Disabling HTML encoding saves CPU and RAM
+            $getID3->option_extra_info = false;
+            $getID3->option_save_attachments = true;
+
+            $fileInfo = $getID3->analyze($localPath);
             \getid3_lib::CopyTagsToComments($fileInfo);
 
-            return $fileInfo;
+            return is_array($fileInfo) ? $fileInfo : [];
         } catch (\Throwable $e) {
-            $this->logger->error('Error parsing ID3 tags: ' . $e->getMessage());
+            $this->logger->error('Error parsing ID3 tags: ' . $e->getMessage(), ['exception' => $e]);
             return [];
         } finally {
-            // Clean up temp file
-            if (isset($tempFile) && file_exists($tempFile)) {
+            // Only unlink temp files created by this service, never user storage files!
+            if ($createdTempFile && $tempFile !== null && file_exists($tempFile)) {
                 @unlink($tempFile);
             }
         }

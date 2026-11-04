@@ -57,6 +57,21 @@ class FeedMapper extends QBMapper
         return $this->findEntity($qb);
     }
 
+    public function findByFolderIdAndUserId(int $folderId, string $userId): ?Feed
+    {
+        $qb = $this->db->getQueryBuilder();
+
+        $qb->select('*')
+            ->from('foldercast_feeds')
+            ->where(
+                $qb->expr()->eq('folder_id', $qb->createNamedParameter($folderId)),
+                $qb->expr()->eq('user_id', $qb->createNamedParameter($userId))
+            );
+
+        $entities = $this->findEntities($qb);
+        return $entities[0] ?? null;
+    }
+
     public function findByUserId(string $userId): array
     {
         $qb = $this->db->getQueryBuilder();
@@ -66,6 +81,19 @@ class FeedMapper extends QBMapper
             ->where(
                 $qb->expr()->eq('user_id', $qb->createNamedParameter($userId))
             );
+
+        return $this->findEntities($qb);
+    }
+
+    /**
+     * @return Feed[]
+     */
+    public function findAll(): array
+    {
+        $qb = $this->db->getQueryBuilder();
+
+        $qb->select('*')
+            ->from('foldercast_feeds');
 
         return $this->findEntities($qb);
     }

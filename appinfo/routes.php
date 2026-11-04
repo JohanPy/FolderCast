@@ -33,11 +33,6 @@ return [
             'verb' => 'PUT',
         ],
         [
-            'name' => 'Api#update',
-            'url' => '/api/feeds/{id}',
-            'verb' => 'PUT',
-        ],
-        [
             'name' => 'Api#uploadLogo',
             'url' => '/api/feeds/{id}/logo',
             'verb' => 'POST',

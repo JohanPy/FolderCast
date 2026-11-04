@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace OCA\FolderCast\Service;
 
-use OCA\FolderCast\Db\FeedMapper;
 use OCA\FolderCast\Db\Feed;
-use OCP\Files\IRootFolder;
-use OCP\Files\Folder;
+use OCA\FolderCast\Db\FeedMapper;
 use OCP\Files\File;
+use OCP\Files\Folder;
+use OCP\Files\IRootFolder;
 use OCP\ICache;
 use OCP\ICacheFactory;
 use OCP\IURLGenerator;
@@ -16,6 +16,28 @@ use Psr\Log\LoggerInterface;
 
 class FeedService
 {
+    public const AUDIO_VIDEO_EXTENSIONS = [
+        'mp3', 'm4a', 'm4b', 'aac', 'ogg', 'oga', 'opus', 'flac', 'wav', 'mp4', 'm4v'
+    ];
+
+    public const COVER_FILE_NAMES = [
+        'cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp'
+    ];
+
+    public const MIME_MAP = [
+        'mp3' => 'audio/mpeg',
+        'm4a' => 'audio/mp4',
+        'm4b' => 'audio/mp4',
+        'aac' => 'audio/aac',
+        'ogg' => 'audio/ogg',
+        'oga' => 'audio/ogg',
+        'opus' => 'audio/opus',
+        'flac' => 'audio/flac',
+        'wav' => 'audio/wav',
+        'mp4' => 'video/mp4',
+        'm4v' => 'video/mp4',
+    ];
+
     private FeedMapper $mapper;
     private MetadataService $metadataService;
     private IRootFolder $rootFolder;
@@ -44,61 +66,119 @@ class FeedService
         return $this->metadataService;
     }
 
-    public function getFeed(string $token): string
+    public function isEpisode(File $file, Folder $root, bool $recursive): bool
     {
-        $cacheKey = 'feed_xml_' . $token;
-        if ($content = $this->cache->get($cacheKey)) {
-            return $content;
+        $fileName = $file->getName();
+        $lowerName = strtolower($fileName);
+
+        if (str_starts_with($fileName, '.')) {
+            return false;
         }
 
-        $feed = $this->mapper->findByToken($token);
-        $xml = $this->generateXml($feed);
+        if (str_starts_with($fileName, '_logo.') || in_array($lowerName, self::COVER_FILE_NAMES, true) || $lowerName === 'podcast.json') {
+            return false;
+        }
 
-        $this->cache->set($cacheKey, $xml, 3600); // 1 hour TTL default
+        $folderPrefix = rtrim($root->getPath(), '/') . '/';
+        $filePath = $file->getPath();
+        if (!str_starts_with($filePath, $folderPrefix)) {
+            return false;
+        }
+
+        if (!$recursive) {
+            $relativePath = substr($filePath, strlen($folderPrefix));
+            if (str_contains($relativePath, '/')) {
+                return false;
+            }
+        }
+
+        $mime = $file->getMimeType();
+        $ext = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+
+        if ($mime === 'application/octet-stream' || empty($mime)) {
+            return in_array($ext, self::AUDIO_VIDEO_EXTENSIONS, true);
+        }
+
+        return str_starts_with($mime, 'audio/') || str_starts_with($mime, 'video/');
+    }
+
+    public function getFeed(string $token): string
+    {
+        $feed = $this->mapper->findByToken($token);
+        $userFolder = $this->rootFolder->getUserFolder($feed->getUserId());
+        $folderNodes = $userFolder->getById($feed->getFolderId());
+
+        if (empty($folderNodes) || !($folderNodes[0] instanceof Folder)) {
+            throw new \RuntimeException('Folder not found');
+        }
+
+        /** @var Folder $folder */
+        $folder = $folderNodes[0];
+        $etag = $folder->getEtag();
+        $configHash = md5($feed->getConfiguration() ?? '{}');
+        $cacheKey = 'feed_xml_v2_' . $token . '_' . $etag . '_' . $configHash;
+
+        $cached = $this->cache->get($cacheKey);
+        if ($cached) {
+            return $cached;
+        }
+
+        $xml = $this->generateXml($feed, $folder);
+        $this->cache->set($cacheKey, $xml, 3600);
         return $xml;
     }
 
     public function clearCache(string $token): void
     {
-        $cacheKey = 'feed_xml_' . $token;
-        $this->logger->info("FolderCast: Clearing cache for key: $cacheKey");
-        $this->cache->remove($cacheKey);
-        // Verify removal
-        if ($this->cache->get($cacheKey)) {
-            $this->logger->error("FolderCast: Cache key still exists after removal: $cacheKey");
-        } else {
-            $this->logger->info("FolderCast: Cache key removed successfully: $cacheKey");
+        try {
+            $feed = $this->mapper->findByToken($token);
+            $userFolder = $this->rootFolder->getUserFolder($feed->getUserId());
+            $folderNodes = $userFolder->getById($feed->getFolderId());
+            if (!empty($folderNodes) && $folderNodes[0] instanceof Folder) {
+                $etag = $folderNodes[0]->getEtag();
+                $configHash = md5($feed->getConfiguration() ?? '{}');
+                $this->cache->remove('feed_xml_v2_' . $token . '_' . $etag . '_' . $configHash);
+            }
+        } catch (\Throwable $e) {
+            // Ignore if feed or folder cannot be loaded
         }
+
+        $this->cache->remove('feed_xml_' . $token);
     }
 
     public function getFile(string $token, int $fileId): ?File
     {
-        // Used by Controller to serve file
         $feed = $this->mapper->findByToken($token);
-        // Security: verify fileId is inside feed's folder
-        // For now, simplicity: just check if user has access.
-        // BETTER: Check that fileId is a descendant of $feed->getFolderId()
-
         $userFolder = $this->rootFolder->getUserFolder($feed->getUserId());
         $nodes = $userFolder->getById($fileId);
         if (empty($nodes)) {
             return null;
         }
-        /** @var File $file */
-        $file = $nodes[0];
 
-        // Verify hierarchy
-        // This might be expensive. For prototype, we skip strict hierarchy check or rely on recursive path check?
-        // A safe way: Check if file path starts with folder path.
+        $file = $nodes[0];
+        if (!($file instanceof File)) {
+            return null;
+        }
 
         $feedFolderNodes = $userFolder->getById($feed->getFolderId());
         if (empty($feedFolderNodes)) {
             return null;
         }
-        $feedFolder = $feedFolderNodes[0];
 
-        if (strpos($file->getPath(), $feedFolder->getPath()) !== 0) {
-            // File is not inside the feed folder
+        $feedFolder = $feedFolderNodes[0];
+        if (!($feedFolder instanceof Folder)) {
+            return null;
+        }
+
+        $folderPrefix = rtrim($feedFolder->getPath(), '/') . '/';
+        if (!str_starts_with($file->getPath(), $folderPrefix)) {
+            return null;
+        }
+
+        $config = json_decode($feed->getConfiguration() ?? '{}', true);
+        $flatten = filter_var($config['flatten'] ?? true, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true;
+
+        if (!$this->isEpisode($file, $feedFolder, $flatten)) {
             return null;
         }
 
@@ -109,20 +189,29 @@ class FeedService
     {
         $feed = $this->mapper->findByToken($token);
         $config = json_decode($feed->getConfiguration() ?? '{}', true);
-
-        if (empty($config['logoFileId'])) {
-            return null;
-        }
-
         $userFolder = $this->rootFolder->getUserFolder($feed->getUserId());
-        $nodes = $userFolder->getById($config['logoFileId']);
 
-        if (empty($nodes)) {
-            return null;
+        if (!empty($config['logoFileId'])) {
+            $nodes = $userFolder->getById($config['logoFileId']);
+            if (!empty($nodes) && $nodes[0] instanceof File) {
+                return $nodes[0];
+            }
         }
 
-        return $nodes[0];
-        return $nodes[0];
+        $folderNodes = $userFolder->getById($feed->getFolderId());
+        if (!empty($folderNodes) && $folderNodes[0] instanceof Folder) {
+            $feedFolder = $folderNodes[0];
+            foreach (self::COVER_FILE_NAMES as $coverName) {
+                if ($feedFolder->nodeExists($coverName)) {
+                    $node = $feedFolder->get($coverName);
+                    if ($node instanceof File) {
+                        return $node;
+                    }
+                }
+            }
+        }
+
+        return null;
     }
 
     public function getCover(string $token, int $fileId): ?array
@@ -134,175 +223,278 @@ class FeedService
         return $this->metadataService->getCover($file);
     }
 
-    private function generateXml(Feed $feed): string
+    public function cleanupOldEpisodes(Feed $feed): int
     {
         $userFolder = $this->rootFolder->getUserFolder($feed->getUserId());
         $folderNodes = $userFolder->getById($feed->getFolderId());
-
-        if (empty($folderNodes)) {
-            throw new \RuntimeException('Folder not found');
+        if (empty($folderNodes) || !($folderNodes[0] instanceof Folder)) {
+            return 0;
         }
 
-        /** @var Folder $folder */
         $folder = $folderNodes[0];
-
-        // Config Logic
         $config = json_decode($feed->getConfiguration() ?? '{}', true);
-        $flatten = $config['flatten'] ?? true;
         $autoremoveDays = (int) ($config['autoremoveDays'] ?? 0);
+        if ($autoremoveDays <= 0) {
+            return 0;
+        }
 
-        // Autoremove Cleanup Logic
-        if ($autoremoveDays > 0) {
-            $allNodes = $folder->getDirectoryListing(); // Shallow scan for cleanup
-            foreach ($allNodes as $node) {
-                if ($node instanceof File) {
-                    $mtime = $node->getMtime();
-                    // Check if file is older than N days
-                    if (time() - $mtime > $autoremoveDays * 86400) {
-                        // Avoid deleting the config file or logo
-                        if ($node->getName() === 'podcast.json' || str_starts_with($node->getName(), '_logo.')) {
-                            continue;
-                        }
-                        try {
-                            $node->delete();
-                        } catch (\Throwable $e) {
-                            $this->logger->error('FolderCast Autoremove failed for ' . $node->getPath() . ': ' . $e->getMessage());
-                        }
-                    }
+        $flatten = filter_var($config['flatten'] ?? true, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true;
+        $episodes = [];
+        $this->scanFolder($folder, $episodes, $flatten, $folder);
+
+        $now = time();
+        $cutoff = $autoremoveDays * 86400;
+        $deleted = 0;
+
+        foreach ($episodes as $episode) {
+            if (($now - $episode->getMtime()) > $cutoff) {
+                try {
+                    $episode->delete();
+                    $deleted++;
+                } catch (\Throwable $e) {
+                    $this->logger->error('FolderCast: autoremove failed for ' . $episode->getPath() . ': ' . $e->getMessage(), [
+                        'exception' => $e
+                    ]);
                 }
             }
         }
 
-        // Default Metadata (Folder Name)
-        $channelTitle = $folder->getName();
-        $channelDesc = "Podcast from " . $folder->getName();
-        $channelAuthor = '';
-        $channelImage = null;
+        if ($deleted > 0) {
+            $this->clearCache($feed->getToken());
+        }
 
-        // Waterfall 1: podcast.json (File-based override)
+        return $deleted;
+    }
+
+    public function scanFolder(Folder $folder, array &$items, bool $recursive, ?Folder $root = null, int $depth = 0): void
+    {
+        if ($depth > 20) {
+            return;
+        }
+        $root = $root ?? $folder;
+        $nodes = $folder->getDirectoryListing();
+
+        foreach ($nodes as $node) {
+            if ($node instanceof File) {
+                if ($this->isEpisode($node, $root, $recursive)) {
+                    $items[] = $node;
+                }
+            } elseif ($node instanceof Folder && $recursive) {
+                if (!str_starts_with($node->getName(), '.')) {
+                    try {
+                        $this->scanFolder($node, $items, true, $root, $depth + 1);
+                    } catch (\Throwable $e) {
+                        $this->logger->warning('FolderCast: failed to scan directory ' . $node->getPath() . ': ' . $e->getMessage());
+                    }
+                }
+            }
+        }
+    }
+
+    private function xml(string $string): string
+    {
+        $cleaned = preg_replace('/[^\x{9}\x{A}\x{D}\x{20}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}]/u', '', $string) ?? '';
+        return htmlspecialchars($cleaned, ENT_XML1 | ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+
+    public function generateXml(Feed $feed, ?Folder $folder = null): string
+    {
+        if ($folder === null) {
+            $userFolder = $this->rootFolder->getUserFolder($feed->getUserId());
+            $folderNodes = $userFolder->getById($feed->getFolderId());
+            if (empty($folderNodes) || !($folderNodes[0] instanceof Folder)) {
+                throw new \RuntimeException('Folder not found');
+            }
+            $folder = $folderNodes[0];
+        }
+
+        $config = json_decode($feed->getConfiguration() ?? '{}', true);
+        if (!is_array($config)) {
+            $config = [];
+        }
+        $flatten = filter_var($config['flatten'] ?? true, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true;
+
+        // Default Metadata
+        $channelTitle = $folder->getName();
+        $channelDesc = 'Podcast from ' . $folder->getName();
+        $channelAuthor = '';
+
+        // Waterfall 1: podcast.json
         if ($folder->nodeExists('podcast.json')) {
             try {
                 $jsonFile = $folder->get('podcast.json');
                 if ($jsonFile instanceof File) {
                     $meta = json_decode($jsonFile->getContent(), true);
-                    $channelTitle = $meta['title'] ?? $channelTitle;
-                    $channelDesc = $meta['description'] ?? $channelDesc;
-                    $channelAuthor = $meta['author'] ?? $channelAuthor;
+                    if (is_array($meta)) {
+                        $channelTitle = !empty(trim((string)($meta['title'] ?? ''))) ? trim((string)$meta['title']) : $channelTitle;
+                        $channelDesc = !empty(trim((string)($meta['description'] ?? ''))) ? trim((string)$meta['description']) : $channelDesc;
+                        $channelAuthor = !empty(trim((string)($meta['author'] ?? ''))) ? trim((string)$meta['author']) : $channelAuthor;
+                    }
                 }
             } catch (\Throwable $e) {
+                // Ignore corrupt podcast.json
             }
         }
 
-        // Waterfall 2: Database Config (UI-based override) - Highest Priority
+        // Waterfall 2: Database Config (highest priority)
         if (!empty($config['title'])) {
-            $channelTitle = $config['title'];
+            $channelTitle = (string)$config['title'];
         }
         if (!empty($config['description'])) {
-            $channelDesc = $config['description'];
+            $channelDesc = (string)$config['description'];
         }
         if (!empty($config['author'])) {
-            $channelAuthor = $config['author'];
+            $channelAuthor = (string)$config['author'];
         }
 
-        // Logo logic: prioritized local file > remote url
+        // Logo logic: uploaded logo > remote imageUrl > folder cover file
         $logoUrl = null;
         if (!empty($config['logoFileId'])) {
             $logoUrl = $this->urlGenerator->linkToRouteAbsolute('foldercast.feed.logo', [
                 'token' => $feed->getToken(),
-                'v' => $config['logoFileId'] // Cache busting
+                'v' => $config['logoFileId'],
             ]);
         } elseif (!empty($config['imageUrl'])) {
             $logoUrl = $config['imageUrl'];
+        } else {
+            foreach (self::COVER_FILE_NAMES as $coverName) {
+                if ($folder->nodeExists($coverName)) {
+                    $coverNode = $folder->get($coverName);
+                    $v = ($coverNode instanceof File) ? $coverNode->getMtime() : 1;
+                    $logoUrl = $this->urlGenerator->linkToRouteAbsolute('foldercast.feed.logo', [
+                        'token' => $feed->getToken(),
+                        'v' => $v,
+                    ]);
+                    break;
+                }
+            }
         }
 
-        // Scanning
+        // Scanning episodes
         $items = [];
-        $this->scanFolder($folder, $items, $flatten);
+        $this->scanFolder($folder, $items, $flatten, $folder);
 
-        // XML Generation
-        $output = '<?xml version="1.0" encoding="UTF-8"?>';
-        $output .= '<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">';
-        $output .= '<channel>';
-        $output .= '<title>' . htmlspecialchars($channelTitle) . '</title>';
-        $output .= '<description>' . htmlspecialchars($channelDesc) . '</description>';
-        if ($channelAuthor) {
-            $output .= '<itunes:author>' . htmlspecialchars($channelAuthor) . '</itunes:author>';
-        }
-        if ($logoUrl) {
-            $output .= '<itunes:image href="' . htmlspecialchars($logoUrl) . '"/>';
-            $output .= '<image><url>' . htmlspecialchars($logoUrl) . '</url><title>' . htmlspecialchars($channelTitle) . '</title></image>';
-        }
-
+        // Prepare items with metadata and timestamps for deterministic sorting
+        $episodes = [];
         foreach ($items as $item) {
-            // $item is File
             $meta = $this->metadataService->getMetadata($item);
+
+            $ts = null;
+            if (!empty($meta['date'])) {
+                $parsed = strtotime((string)$meta['date']);
+                if ($parsed !== false) {
+                    $ts = $parsed;
+                }
+            }
+            if ($ts === null) {
+                $ts = $item->getMtime();
+            }
+
+            $episodes[] = [
+                'item' => $item,
+                'meta' => $meta,
+                'timestamp' => $ts,
+            ];
+        }
+
+        // Sort episodes
+        $sortBy = $config['sortBy'] ?? 'date_desc';
+        if ($sortBy === 'date_asc') {
+            usort($episodes, static fn($a, $b) => $a['timestamp'] <=> $b['timestamp']);
+        } elseif ($sortBy === 'name') {
+            usort($episodes, static fn($a, $b) => strnatcasecmp(
+                $a['meta']['title'] ?? $a['item']->getName(),
+                $b['meta']['title'] ?? $b['item']->getName()
+            ));
+        } else {
+            // Default date_desc
+            usort($episodes, static fn($a, $b) => $b['timestamp'] <=> $a['timestamp']);
+        }
+
+        $feedUrl = $this->urlGenerator->linkToRouteAbsolute('foldercast.feed.show', [
+            'token' => $feed->getToken(),
+        ]);
+
+        $output = '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
+        $output .= '<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom">' . "\n";
+        $output .= '<channel>' . "\n";
+        $output .= '  <title>' . $this->xml($channelTitle) . '</title>' . "\n";
+        $output .= '  <description>' . $this->xml($channelDesc) . '</description>' . "\n";
+        $output .= '  <link>' . $this->xml($feedUrl) . '</link>' . "\n";
+        $output .= '  <language>' . $this->xml((string)($config['language'] ?? 'fr')) . '</language>' . "\n";
+        $output .= '  <lastBuildDate>' . date('r') . '</lastBuildDate>' . "\n";
+        $output .= '  <atom:link href="' . $this->xml($feedUrl) . '" rel="self" type="application/rss+xml"/>' . "\n";
+        $output .= '  <itunes:explicit>false</itunes:explicit>' . "\n";
+        $output .= '  <itunes:category text="Technology"/>' . "\n";
+
+        if ($channelAuthor !== '') {
+            $output .= '  <itunes:author>' . $this->xml($channelAuthor) . '</itunes:author>' . "\n";
+        }
+
+        if ($logoUrl) {
+            $output .= '  <itunes:image href="' . $this->xml($logoUrl) . '"/>' . "\n";
+            $output .= '  <image>' . "\n";
+            $output .= '    <url>' . $this->xml($logoUrl) . '</url>' . "\n";
+            $output .= '    <title>' . $this->xml($channelTitle) . '</title>' . "\n";
+            $output .= '    <link>' . $this->xml($feedUrl) . '</link>' . "\n";
+            $output .= '  </image>' . "\n";
+        }
+
+        foreach ($episodes as $ep) {
+            /** @var File $item */
+            $item = $ep['item'];
+            $meta = $ep['meta'];
+            $ts = $ep['timestamp'];
+
             $downloadUrl = $this->urlGenerator->linkToRouteAbsolute('foldercast.feed.download', [
                 'token' => $feed->getToken(),
-                'fileId' => $item->getId()
+                'fileId' => $item->getId(),
             ]);
 
-            $output .= '<item>';
-            $output .= '<title>' . htmlspecialchars($meta['title']) . '</title>';
-            $output .= '<enclosure url="' . htmlspecialchars($downloadUrl) . '" length="' . $item->getSize() . '" type="' . $item->getMimeType() . '" />';
-            $output .= '<guid>' . $item->getId() . '</guid>';
-
-            if (!empty($meta['date'])) {
-                // Try to parse date, fallback to file mtime if invalid
-                $ts = strtotime($meta['date']);
-                if ($ts === false) {
-                    $ts = $item->getMtime();
-                }
-                $output .= '<pubDate>' . date('r', $ts) . '</pubDate>';
-            } else {
-                $output .= '<pubDate>' . date('r', $item->getMtime()) . '</pubDate>';
+            $mime = $item->getMimeType();
+            $ext = strtolower(pathinfo($item->getName(), PATHINFO_EXTENSION));
+            if ($mime === 'application/octet-stream' || empty($mime)) {
+                $mime = self::MIME_MAP[$ext] ?? 'audio/mpeg';
             }
+
+            $output .= '  <item>' . "\n";
+            $output .= '    <title>' . $this->xml((string)($meta['title'] ?? $item->getName())) . '</title>' . "\n";
+            $output .= '    <enclosure url="' . $this->xml($downloadUrl) . '" length="' . $item->getSize() . '" type="' . $this->xml($mime) . '"/>' . "\n";
+            $output .= '    <guid isPermaLink="false">foldercast-' . $feed->getId() . '-' . $item->getId() . '</guid>' . "\n";
+            $output .= '    <pubDate>' . date('r', $ts) . '</pubDate>' . "\n";
 
             if (!empty($meta['has_cover'])) {
                 $coverUrl = $this->urlGenerator->linkToRouteAbsolute('foldercast.feed.cover', [
                     'token' => $feed->getToken(),
-                    'fileId' => $item->getId()
+                    'fileId' => $item->getId(),
                 ]);
-                $output .= '<itunes:image href="' . htmlspecialchars($coverUrl) . '"/>';
+                $output .= '    <itunes:image href="' . $this->xml($coverUrl) . '"/>' . "\n";
             }
 
             if (!empty($meta['description'])) {
-                $output .= '<description>' . htmlspecialchars($meta['description']) . '</description>';
-                $output .= '<itunes:summary>' . htmlspecialchars($meta['description']) . '</itunes:summary>';
+                $desc = (string)$meta['description'];
+                $output .= '    <description>' . $this->xml($desc) . '</description>' . "\n";
+                $output .= '    <itunes:summary>' . $this->xml($desc) . '</itunes:summary>' . "\n";
             }
 
             if (!empty($meta['artist'])) {
-                $output .= '<itunes:author>' . htmlspecialchars($meta['artist']) . '</itunes:author>';
+                $output .= '    <itunes:author>' . $this->xml((string)$meta['artist']) . '</itunes:author>' . "\n";
             }
 
-            if (!empty($meta['url'])) {
-                $output .= '<link>' . htmlspecialchars($meta['url']) . '</link>';
+            if (!empty($meta['url']) && filter_var($meta['url'], FILTER_VALIDATE_URL)) {
+                $output .= '    <link>' . $this->xml((string)$meta['url']) . '</link>' . "\n";
             }
 
-            if (!empty($meta['duration'])) {
-                $output .= '<itunes:duration>' . $meta['duration'] . '</itunes:duration>';
+            if (!empty($meta['duration']) && (int)$meta['duration'] > 0) {
+                $output .= '    <itunes:duration>' . ((int)$meta['duration']) . '</itunes:duration>' . "\n";
             }
-            $output .= '</item>';
+
+            $output .= '  </item>' . "\n";
         }
 
-        $output .= '</channel>';
-        $output .= '</rss>';
+        $output .= '</channel>' . "\n";
+        $output .= '</rss>' . "\n";
 
         return $output;
-    }
-
-    private function scanFolder(Folder $folder, array &$items, bool $recursive): void
-    {
-        $nodes = $folder->getDirectoryListing();
-        foreach ($nodes as $node) {
-            if ($node instanceof File) {
-                $mime = $node->getMimeType();
-                // Allow audio, video, and octet-stream (often MP3s with wrong mime)
-                if (str_starts_with($mime, 'audio/') || str_starts_with($mime, 'video/') || $mime === 'application/octet-stream') {
-                    $items[] = $node;
-                }
-            } elseif ($node instanceof Folder && $recursive) {
-                $this->scanFolder($node, $items, true);
-            }
-        }
     }
 }

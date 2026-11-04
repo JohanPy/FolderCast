@@ -1,17 +1,13 @@
 # Composer
 vendor/
-composer.lock
+vendor-bin/**/composer.lock
 
 # Node
 node_modules/
-package-lock.json
-
-# Build Artifacts (Keep standard files, ignore maps if desired, keeping for now)
-# /js
-# /css
 
 # Nextcloud
 /tests/integration/vendor
+/tests/.phpunit.cache/
 *.log
 
 # OS
@@ -28,11 +24,10 @@ Thumbs.db
 # Docker / Environment
 docker-compose.yml
 nextcloud_data/
-*.log
 
 # Build Artifacts
-files.js
-main.js
+/files.js
+/main.js
 dist-main/
 dist-files/
 build/
